@@ -59,6 +59,10 @@
            border: 1px solid var(--warn); color: var(--warn); margin-top: 4px; }
   .loc { font-size: .85rem; margin-top: 2px; color: var(--muted); }
   .loc a { display: inline; color: var(--accent); text-decoration: underline; }
+  .note { font-size: .82rem; font-style: italic; color: var(--muted); margin-top: 2px; }
+  .editform { margin-top: 10px; }
+  .editform input { margin: 4px 0; }
+  .editform .row { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -201,6 +205,7 @@
     const info = el('div', 'info');
     info.append(el('div', 't', b.title || 'Unknown title (' + b.isbn + ')'));
     if (b.author) info.append(el('div', 'a', b.author));
+    if (b.notes) info.append(el('div', 'note', b.notes));
     if (lent) {
       const when = b.lentDate ? ' · ' + fmtDate(b.lentDate) : '';
       info.append(el('div', 'badge', 'Lent to ' + (b.lentTo || 'someone') + when));
@@ -234,9 +239,54 @@
       }
     };
 
+    // Tap Edit to fix the title or author, or add a note (e.g. "Target exclusive").
+    const editLink = el('button', 'link', 'Edit');
+    info.append(editLink);
+    let form = null;
+    editLink.onclick = () => {
+      if (form) { form.remove(); form = null; return; }
+      form = editForm(b, () => { form.remove(); form = null; });
+      li.append(form);
+    };
+
     wrap.append(info, btn);
     li.append(wrap);
     return li;
+  }
+
+  function editForm(b, close) {
+    const f = el('div', 'editform');
+    const field = (placeholder, value) => {
+      const i = el('input');
+      i.type = 'text';
+      i.placeholder = placeholder;
+      i.value = value || '';
+      return i;
+    };
+    const title = field('Title', b.title);
+    const author = field('Author', b.author);
+    const notes = field('Note (e.g. Target exclusive)', b.notes);
+    const row = el('div', 'row');
+    const save = el('button', 'small', 'Save');
+    const cancel = el('button', 'small secondary', 'Cancel');
+    cancel.onclick = close;
+    save.onclick = async () => {
+      save.disabled = true;
+      try {
+        const d = await apiPost({
+          action: 'edit', isbn: b.isbn,
+          title: title.value, author: author.value, notes: notes.value,
+        });
+        if (d.error) throw new Error(d.error);
+        refresh();
+      } catch (e) {
+        alert('Error: ' + e.message);
+        save.disabled = false;
+      }
+    };
+    row.append(save, cancel);
+    f.append(title, author, notes, row);
+    return f;
   }
 
   // ---------- Home + search ----------
@@ -394,9 +444,10 @@
       else if (d.result === 'added_unknown') {
         toast('Not found in book databases. Added ISBN ' + isbn + ' with no title.', 'warn');
         const title = prompt('No match for ' + isbn + '. Type the title (or Cancel to fill it in later):');
-        if (title) {
-          await apiPost({ action: 'set_title', isbn: isbn, title: title });
-          toast('Added: ' + title, 'ok');
+        if (title && title.trim()) {
+          const author = prompt('Author? (optional — Cancel to skip)');
+          await apiPost({ action: 'edit', isbn: isbn, title: title.trim(), author: (author || '').trim() });
+          toast('Added: ' + title.trim(), 'ok');
         }
       }
       loadShelf();
