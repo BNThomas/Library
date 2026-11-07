@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookshelf</title>
+<style>
+  :root {
+    --bg: #faf8f5; --fg: #1f1d1a; --muted: #6f6a62; --card: #ffffff;
+    --line: #e4dfd6; --accent: #2f5d50; --accent-fg: #ffffff; --warn: #9a5b00; --err: #a33a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161513; --fg: #efebe4; --muted: #a39d92; --card: #211f1c;
+      --line: #36322d; --accent: #6fb5a1; --accent-fg: #102019; --warn: #e0a64a; --err: #e58a7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: .9rem; }
+  button, input { font: inherit; }
+  button { border: 0; border-radius: 12px; padding: 14px 18px; background: var(--accent);
+           color: var(--accent-fg); font-weight: 600; width: 100%; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  button.small { width: auto; padding: 8px 12px; font-size: .85rem; }
+  input[type=text], input[type=url], input[type=password], input[type=search] {
+    width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); }
+  .row { display: flex; gap: 8px; margin: 10px 0; }
+  .row > * { flex: 1; }
+  ul { list-style: none; padding: 0; margin: 16px 0; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+       padding: 10px 14px; margin-bottom: 8px; }
+  li .t { font-weight: 600; }
+  li .a { color: var(--muted); font-size: .88rem; }
+  li a { color: inherit; text-decoration: none; display: block; }
+  .count { float: right; color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 24px 0; }
+  .hidden { display: none !important; }
+  #scanner { position: relative; margin: 12px 0; border-radius: 14px; overflow: hidden; background: #000; }
+  #video { width: 100%; max-height: 50vh; object-fit: cover; display: block; }
+  #reticle { position: absolute; inset: 22% 10%; border: 2px solid rgba(255,255,255,.8);
+             border-radius: 10px; pointer-events: none; }
+  #toast { min-height: 2.6em; padding: 8px 12px; border-radius: 10px; margin: 8px 0;
+           background: var(--card); border: 1px solid var(--line); font-size: .92rem; }
+  #toast.ok { border-color: var(--accent); }
+  #toast.warn { border-color: var(--warn); }
+  #toast.err { border-color: var(--err); }
+  .link { background: none; color: var(--muted); width: auto; padding: 4px 0; font-weight: 400;
+          text-decoration: underline; font-size: .85rem; }
+  .bk { display: flex; gap: 10px; align-items: center; }
+  .bk .info { flex: 1; min-width: 0; }
+  .bk button { flex: 0 0 auto; }
+  .badge { display: inline-block; font-size: .78rem; padding: 2px 8px; border-radius: 99px;
+           border: 1px solid var(--warn); color: var(--warn); margin-top: 4px; }
+  .loc { font-size: .85rem; margin-top: 2px; color: var(--muted); }
+  .loc a { display: inline; color: var(--accent); text-decoration: underline; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- Setup (first run) -->
+  <section id="setup" class="hidden">
+    <h1>Setup</h1>
+    <p class="sub">Paste your Apps Script web app URL and the secret key you set in Code.gs. They're saved on this phone only.</p>
+    <div class="row"><input id="cfgUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec"></div>
+    <div class="row"><input id="cfgKey" type="password" placeholder="Secret key"></div>
+    <button id="saveCfg">Save</button>
+  </section>
+
+  <!-- Home: find a book + shelf picker (no ?section= in the link) -->
+  <section id="home" class="hidden">
+    <h1>Bookshelf</h1>
+    <div class="row"><input id="findInput" type="search" placeholder="Find a book by title or author"></div>
+    <ul id="findResults" class="hidden"></ul>
+    <div id="shelvesBlock">
+      <p class="sub">Pick a shelf, or tap a shelf's NFC tag.</p>
+      <ul id="sectionList"></ul>
+      <div class="row">
+        <input id="newSection" type="text" placeholder="New section name">
+        <button id="goSection" class="small" style="flex:0 0 auto">Open</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Shelf view (also used for the "Lent out" list) -->
+  <section id="shelf" class="hidden">
+    <h1 id="shelfName"></h1>
+    <p class="sub" id="shelfCount"></p>
+
+    <button id="startScan">Scan a book</button>
+
+    <div id="scanArea" class="hidden">
+      <div id="scanner">
+        <video id="video" playsinline muted></video>
+        <div id="reticle"></div>
+      </div>
+      <div id="toast">Point the camera at a book's barcode.</div>
+      <div class="row">
+        <input id="manualIsbn" type="text" inputmode="numeric" placeholder="Or type an ISBN">
+        <button id="addManual" class="small secondary" style="flex:0 0 auto">Add</button>
+      </div>
+      <button id="stopScan" class="secondary">Done scanning</button>
+    </div>
+
+    <ul id="bookList"></ul>
+    <div style="display:flex; justify-content:space-between">
+      <button class="link" id="allShelves">All shelves</button>
+      <button class="link" id="findLink">Find a book</button>
+      <button class="link" id="resetCfg">Settings</button>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const section = params.get('section');
+  const lentParam = params.get('lent');
+  const findParam = params.get('find');
+  let cfg = null;
+  try { cfg = JSON.parse(localStorage.getItem('shelfcfg') || 'null'); } catch (e) {}
+  let refresh = function () {};
+
+  function show(id) {
+    ['setup', 'home', 'shelf'].forEach(s => $(s).classList.toggle('hidden', s !== id));
+  }
+  function pretty(s) { return String(s).replace(/-/g, ' '); }
+  function fmtDate(s) {
+    const d = new Date(s);
+    return isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  // ---------- API ----------
+  async function apiGet(p) {
+    const u = new URL(cfg.url);
+    Object.entries(Object.assign({}, p, { key: cfg.key })).forEach(([k, v]) => u.searchParams.set(k, v));
+    const r = await fetch(u);
+    return r.json();
+  }
+  async function apiPost(body) {
+    const r = await fetch(cfg.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight
+      body: JSON.stringify(Object.assign({}, body, { key: cfg.key })),
+    });
+    return r.json();
+  }
+
+  // ---------- ISBN helpers ----------
+  function isValidIsbn13(s) {
+    if (!/^\d{13}$/.test(s) || !/^97[89]/.test(s)) return false;
+    let sum = 0;
+    for (let i = 0; i < 12; i++) sum += Number(s[i]) * (i % 2 ? 3 : 1);
+    return (10 - (sum % 10)) % 10 === Number(s[12]);
+  }
+  function normalizeIsbn(input) {
+    const s = String(input).replace(/[\s-]/g, '').toUpperCase();
+    if (isValidIsbn13(s)) return s;
+    if (/^\d{9}[\dX]$/.test(s)) {
+      let sum = 0;
+      for (let i = 0; i < 10; i++) sum += (10 - i) * (s[i] === 'X' ? 10 : Number(s[i]));
+      if (sum % 11 !== 0) return null;
+      const core = '978' + s.slice(0, 9);
+      let t = 0;
+      for (let i = 0; i < 12; i++) t += Number(core[i]) * (i % 2 ? 3 : 1);
+      return core + ((10 - (t % 10)) % 10);
+    }
+    return null;
+  }
+
+  // ---------- Rendering ----------
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function linkItem(href, label, n) {
+    const li = el('li');
+    const a = el('a');
+    a.href = href;
+    a.append(el('span', 'count', n + (n === 1 ? ' book' : ' books')), el('span', 't', label));
+    li.append(a);
+    return li;
+  }
+
+  // One book row with a Lend / Returned button. showWhere adds the shelf location line.
+  function bookRow(b, showWhere) {
+    const lent = b.status === 'Lent out';
+    const li = el('li');
+    const wrap = el('div', 'bk');
+    const info = el('div', 'info');
+    info.append(el('div', 't', b.title || 'Unknown title (' + b.isbn + ')'));
+    if (b.author) info.append(el('div', 'a', b.author));
+    if (lent) {
+      const when = b.lentDate ? ' · ' + fmtDate(b.lentDate) : '';
+      info.append(el('div', 'badge', 'Lent to ' + (b.lentTo || 'someone') + when));
+    }
+    if (showWhere && b.section) {
+      const loc = el('div', 'loc');
+      loc.append(document.createTextNode(lent ? 'Belongs on: ' : 'On shelf: '));
+      const a = el('a', null, pretty(b.section));
+      a.href = '?section=' + encodeURIComponent(b.section);
+      loc.append(a);
+      info.append(loc);
+    }
+
+    const btn = el('button', 'small secondary', lent ? 'Returned' : 'Lend');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        let d;
+        if (lent) {
+          d = await apiPost({ action: 'return', isbn: b.isbn });
+        } else {
+          const who = prompt('Lend "' + (b.title || b.isbn) + '" to who?');
+          if (!who || !who.trim()) { btn.disabled = false; return; }
+          d = await apiPost({ action: 'lend', isbn: b.isbn, who: who.trim() });
+        }
+        if (d.error) throw new Error(d.error);
+        refresh();
+      } catch (e) {
+        alert('Error: ' + e.message);
+        btn.disabled = false;
+      }
+    };
+
+    wrap.append(info, btn);
+    li.append(wrap);
+    return li;
+  }
+
+  // ---------- Home + search ----------
+  let searchTimer = null, searchSeq = 0;
+
+  function runSearch() {
+    const q = $('findInput').value.trim();
+    const box = $('findResults');
+    if (q.length < 2) {
+      searchSeq++;
+      box.classList.add('hidden');
+      $('shelvesBlock').classList.remove('hidden');
+      return;
+    }
+    $('shelvesBlock').classList.add('hidden');
+    box.classList.remove('hidden');
+    const seq = ++searchSeq;
+    apiGet({ action: 'search', q: q }).then(d => {
+      if (seq !== searchSeq) return;
+      if (d.error) throw new Error(d.error);
+      box.replaceChildren();
+      if (!d.books.length) box.append(el('li', 'empty', 'No matches in your library.'));
+      d.books.forEach(b => box.append(bookRow(b, true)));
+    }).catch(e => {
+      if (seq === searchSeq) box.replaceChildren(el('li', 'empty', 'Could not search: ' + e.message));
+    });
+  }
+
+  async function loadHome() {
+    show('home');
+    refresh = runSearch;
+    const ul = $('sectionList');
+    ul.replaceChildren(el('li', 'empty', 'Loading…'));
+    try {
+      const d = await apiGet({ action: 'sections' });
+      if (d.error) throw new Error(d.error);
+      ul.replaceChildren();
+      if (d.lentCount) ul.append(linkItem('?lent=1', 'Lent out', d.lentCount));
+      d.sections.forEach(s => ul.append(linkItem('?section=' + encodeURIComponent(s.name), pretty(s.name), s.count)));
+      if (!ul.children.length) ul.append(el('li', 'empty', 'No shelves yet. Add one below.'));
+    } catch (e) {
+      ul.replaceChildren(el('li', 'empty', 'Could not load: ' + e.message));
+    }
+  }
+
+  // ---------- Shelf + lent views ----------
+  async function loadShelf() {
+    $('shelfName').textContent = pretty(section);
+    show('shelf');
+    refresh = loadShelf;
+    const ul = $('bookList');
+    try {
+      const d = await apiGet({ action: 'list', section: section });
+      if (d.error) throw new Error(d.error);
+      const onShelf = d.books.filter(b => b.status !== 'Lent out').length;
+      const out = d.books.length - onShelf;
+      $('shelfCount').textContent = onShelf + (onShelf === 1 ? ' book' : ' books') + ' on this shelf' +
+        (out ? ' · ' + out + ' lent out' : '');
+      ul.replaceChildren();
+      if (!d.books.length) ul.append(el('li', 'empty', 'Nothing here yet. Scan a book to add it.'));
+      d.books.forEach(b => ul.append(bookRow(b, false)));
+    } catch (e) {
+      $('shelfCount').textContent = 'Could not load: ' + e.message;
+    }
+  }
+
+  async function loadLent() {
+    $('shelfName').textContent = 'Lent out';
+    $('startScan').classList.add('hidden');
+    show('shelf');
+    refresh = loadLent;
+    const ul = $('bookList');
+    try {
+      const d = await apiGet({ action: 'lent' });
+      if (d.error) throw new Error(d.error);
+      $('shelfCount').textContent = d.books.length + (d.books.length === 1 ? ' book' : ' books') + ' out right now';
+      ul.replaceChildren();
+      if (!d.books.length) ul.append(el('li', 'empty', 'Nothing is lent out right now.'));
+      d.books.forEach(b => ul.append(bookRow(b, true)));
+    } catch (e) {
+      $('shelfCount').textContent = 'Could not load: ' + e.message;
+    }
+  }
+
+  // ---------- Scanning ----------
+  let stream = null, scanning = false, detector = null, busy = false;
+  const seen = {};
+
+  function toast(msg, kind) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = kind || '';
+  }
+
+  async function handleIsbn(isbn) {
+    if (busy) return;
+    busy = true;
+    seen[isbn] = Date.now();
+    toast('Looking up ' + isbn + '…');
+    try {
+      const d = await apiPost({ action: 'add', isbn: isbn, section: section });
+      if (d.error) throw new Error(d.error);
+      const name = d.book.title || isbn;
+      if (navigator.vibrate) navigator.vibrate(80);
+      if (d.result === 'added') toast('Added: ' + name, 'ok');
+      else if (d.result === 'moved') toast('Moved to this shelf: ' + name + (d.from ? ' (from ' + pretty(d.from) + ')' : ''), 'ok');
+      else if (d.result === 'returned') toast('Returned and shelved: ' + name, 'ok');
+      else if (d.result === 'already_here') toast('Already on this shelf: ' + name, 'warn');
+      else if (d.result === 'added_unknown') {
+        toast('Not found in book databases. Added ISBN ' + isbn + ' with no title.', 'warn');
+        const title = prompt('No match for ' + isbn + '. Type the title (or Cancel to fill it in later):');
+        if (title) {
+          await apiPost({ action: 'set_title', isbn: isbn, title: title });
+          toast('Added: ' + title, 'ok');
+        }
+      }
+      loadShelf();
+    } catch (e) {
+      toast('Error: ' + e.message, 'err');
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function startScan() {
+    $('startScan').classList.add('hidden');
+    $('scanArea').classList.remove('hidden');
+    if (!('BarcodeDetector' in window) || !navigator.mediaDevices) {
+      $('scanner').classList.add('hidden');
+      toast('Camera scanning isn’t supported in this browser. Use Chrome on Android, or type the ISBN below.', 'warn');
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      const v = $('video');
+      v.srcObject = stream;
+      await v.play();
+      detector = new BarcodeDetector({ formats: ['ean_13'] });
+      scanning = true;
+      toast('Point the camera at a book’s barcode.');
+      loop();
+    } catch (e) {
+      $('scanner').classList.add('hidden');
+      toast('Camera unavailable (' + e.name + '). You can type ISBNs below.', 'err');
+    }
+  }
+
+  async function loop() {
+    if (!scanning) return;
+    if (!busy) {
+      try {
+        const codes = await detector.detect($('video'));
+        for (const c of codes) {
+          const v = c.rawValue;
+          if (isValidIsbn13(v) && !(seen[v] && Date.now() - seen[v] < 5000)) {
+            await handleIsbn(v);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+    setTimeout(loop, 200);
+  }
+
+  function stopScan() {
+    scanning = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    $('scanArea').classList.add('hidden');
+    $('scanner').classList.remove('hidden');
+    $('startScan').classList.remove('hidden');
+  }
+
+  // ---------- Wiring ----------
+  $('saveCfg').onclick = () => {
+    const url = $('cfgUrl').value.trim(), key = $('cfgKey').value.trim();
+    if (!url || !key) return;
+    localStorage.setItem('shelfcfg', JSON.stringify({ url: url, key: key }));
+    location.reload();
+  };
+  $('resetCfg').onclick = () => { localStorage.removeItem('shelfcfg'); location.reload(); };
+  $('allShelves').onclick = () => { location.href = location.pathname; };
+  $('findLink').onclick = () => { location.href = '?find=1'; };
+  $('startScan').onclick = startScan;
+  $('stopScan').onclick = stopScan;
+  $('addManual').onclick = () => {
+    const isbn = normalizeIsbn($('manualIsbn').value);
+    if (!isbn) { toast('That doesn’t look like a valid ISBN.', 'err'); return; }
+    $('manualIsbn').value = '';
+    handleIsbn(isbn);
+  };
+  $('goSection').onclick = () => {
+    const s = $('newSection').value.trim().replace(/\s+/g, '-');
+    if (s) location.href = '?section=' + encodeURIComponent(s);
+  };
+  $('findInput').oninput = () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, 300);
+  };
+
+  if (!cfg) show('setup');
+  else if (lentParam) loadLent();
+  else if (section) loadShelf();
+  else {
+    loadHome();
+    if (findParam) $('findInput').focus();
+  }
+})();
+</script>
+</body>
+</html>
