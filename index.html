@@ -331,14 +331,60 @@
     t.className = kind || '';
   }
 
+  // Replaces the message box with a question and two buttons; resolves true for the first button.
+  function askChoice(message, yesLabel, noLabel) {
+    return new Promise(resolve => {
+      const t = $('toast');
+      t.className = 'warn';
+      t.replaceChildren(el('div', null, message));
+      const row = el('div', 'row');
+      const yes = el('button', 'small', yesLabel);
+      const no = el('button', 'small secondary', noLabel);
+      yes.onclick = () => resolve(true);
+      no.onclick = () => resolve(false);
+      row.append(yes, no);
+      t.append(row);
+    });
+  }
+
   async function handleIsbn(isbn) {
     if (busy) return;
     busy = true;
     seen[isbn] = Date.now();
     toast('Looking up ' + isbn + '…');
     try {
-      const d = await apiPost({ action: 'add', isbn: isbn, section: section });
+      let d = await apiPost({ action: 'add', isbn: isbn, section: section });
       if (d.error) throw new Error(d.error);
+
+      // Same ISBN is already on a different shelf: show where, and ask before moving.
+      if (d.result === 'exists_elsewhere') {
+        const label = d.book.title || isbn;
+        const move = await askChoice('"' + label + '" is already on ' + pretty(d.from) + '.', 'Move here', 'Leave it');
+        if (!move) {
+          seen[isbn] = Date.now() + 10000; // don't re-ask while the camera is still on it
+          toast('Left on ' + pretty(d.from) + ': ' + label, 'warn');
+          return;
+        }
+        d = await apiPost({ action: 'add', isbn: isbn, section: section, move: true });
+        if (d.error) throw new Error(d.error);
+      }
+      // New ISBN, but same title and author as a book you already have (another edition?).
+      else if (d.result === 'possible_duplicate') {
+        const e = d.existing;
+        const where = e.status === 'Lent out' ? 'lent to ' + (e.lentTo || 'someone') : 'on ' + pretty(e.section);
+        const label = d.book.title || isbn;
+        const keep = await askChoice(
+          'You may already own "' + label + '" (a different edition?). It’s ' + where + '.',
+          'Add anyway', 'Skip');
+        if (!keep) {
+          seen[isbn] = Date.now() + 10000;
+          toast('Skipped: ' + label, 'warn');
+          return;
+        }
+        d = await apiPost({ action: 'add', isbn: isbn, section: section, force: true });
+        if (d.error) throw new Error(d.error);
+      }
+
       const name = d.book.title || isbn;
       if (navigator.vibrate) navigator.vibrate(80);
       if (d.result === 'added') toast('Added: ' + name, 'ok');
